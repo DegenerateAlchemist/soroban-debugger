@@ -121,9 +121,9 @@ impl RemoteClient {
                 ..
             } => Ok((paused, current_function, step_count)),
             DebugResponse::Error { message } => Err(DebuggerError::ExecutionError(message).into()),
-            _ => {
-                Err(DebuggerError::ExecutionError("Unexpected response to StepIn".to_string()).into())
-            }
+            _ => Err(
+                DebuggerError::ExecutionError("Unexpected response to StepIn".to_string()).into(),
+            ),
         }
     }
 
@@ -157,9 +157,9 @@ impl RemoteClient {
                 ..
             } => Ok((paused, current_function, step_count)),
             DebugResponse::Error { message } => Err(DebuggerError::ExecutionError(message).into()),
-            _ => {
-                Err(DebuggerError::ExecutionError("Unexpected response to StepOut".to_string()).into())
-            }
+            _ => Err(
+                DebuggerError::ExecutionError("Unexpected response to StepOut".to_string()).into(),
+            ),
         }
     }
 

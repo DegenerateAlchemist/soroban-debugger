@@ -154,22 +154,24 @@ impl DebugServer {
                     message: "Already authenticated".to_string(),
                 },
                 DebugRequest::LoadContract { contract_path } => match fs::read(&contract_path) {
-                    Ok(bytes) => match crate::runtime::executor::ContractExecutor::new(bytes.clone()) {
-                        Ok(executor) => {
-                            let mut engine = DebuggerEngine::new(executor, Vec::new());
-                            let _ = engine.enable_instruction_debug(&bytes);
-                            self.engine = Some(engine);
-                            self.pending_execution = None;
-                            DebugResponse::ContractLoaded {
-                                size: fs::metadata(&contract_path)
-                                    .map(|m| m.len() as usize)
-                                    .unwrap_or(0),
+                    Ok(bytes) => {
+                        match crate::runtime::executor::ContractExecutor::new(bytes.clone()) {
+                            Ok(executor) => {
+                                let mut engine = DebuggerEngine::new(executor, Vec::new());
+                                let _ = engine.enable_instruction_debug(&bytes);
+                                self.engine = Some(engine);
+                                self.pending_execution = None;
+                                DebugResponse::ContractLoaded {
+                                    size: fs::metadata(&contract_path)
+                                        .map(|m| m.len() as usize)
+                                        .unwrap_or(0),
+                                }
                             }
+                            Err(e) => DebugResponse::Error {
+                                message: e.to_string(),
+                            },
                         }
-                        Err(e) => DebugResponse::Error {
-                            message: e.to_string(),
-                        },
-                    },
+                    }
                     Err(e) => DebugResponse::Error {
                         message: format!("Failed to read contract {:?}: {}", contract_path, e),
                     },
