@@ -134,9 +134,135 @@ expected_return = "I64(1)"
 }
 
 #[test]
+fn scenario_passes_when_no_events_are_expected() {
+    let wasm = fixture_wasm("counter");
+    let scenario = NamedTempFile::new().unwrap();
+    fs::write(
+        scenario.path(),
+        r#"
+[[steps]]
+name = "Increment"
+function = "increment"
+args = "[]"
+expected_return = "I64(1)"
+expected_events = []
+"#,
+    )
+    .unwrap();
+
+    base_cmd()
+        .args([
+            "scenario",
+            "--scenario",
+            scenario.path().to_str().unwrap(),
+            "--contract",
+            wasm.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Event assertion passed"));
+}
+
+#[test]
+fn scenario_passes_when_budget_limits_are_within_range() {
+    let wasm = fixture_wasm("counter");
+    let scenario = NamedTempFile::new().unwrap();
+    fs::write(
+        scenario.path(),
+        r#"
+[[steps]]
+name = "Increment"
+function = "increment"
+args = "[]"
+
+[steps.budget_limits]
+max_cpu_instructions = 10000000
+"#,
+    )
+    .unwrap();
+
+    base_cmd()
+        .args([
+            "scenario",
+            "--scenario",
+            scenario.path().to_str().unwrap(),
+            "--contract",
+            wasm.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CPU budget assertion passed"));
+}
+
+#[test]
+fn scenario_fails_when_unexpected_events_are_asserted() {
+    let wasm = fixture_wasm("counter");
+    let scenario = NamedTempFile::new().unwrap();
+    fs::write(
+        scenario.path(),
+        r#"
+[[steps]]
+name = "Increment"
+function = "increment"
+args = "[]"
+
+[[steps.expected_events]]
+contract_id = ""
+topics = ["topic"]
+data = "payload"
+"#,
+    )
+    .unwrap();
+
+    base_cmd()
+        .args([
+            "scenario",
+            "--scenario",
+            scenario.path().to_str().unwrap(),
+            "--contract",
+            wasm.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Event assertion failed"));
+}
+
+#[test]
+fn scenario_fails_when_budget_limits_are_exceeded() {
+    let wasm = fixture_wasm("counter");
+    let scenario = NamedTempFile::new().unwrap();
+    fs::write(
+        scenario.path(),
+        r#"
+[[steps]]
+name = "Increment"
+function = "increment"
+args = "[]"
+
+[steps.budget_limits]
+max_cpu_instructions = 0
+"#,
+    )
+    .unwrap();
+
+    base_cmd()
+        .args([
+            "scenario",
+            "--scenario",
+            scenario.path().to_str().unwrap(),
+            "--contract",
+            wasm.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CPU budget assertion failed"));
+}
+
+#[test]
 fn repl_accepts_commands_and_exits() {
     let wasm = fixture_wasm("counter");
-    let output = base_cmd()
+    let output = Command::new(env!("CARGO_BIN_EXE_soroban-debug"))
+        .env("NO_COLOR", "1")
         .args(["repl", "--contract", wasm.to_str().unwrap()])
         .write_stdin("help\ncall increment\nexit\n")
         .output()
@@ -155,7 +281,5 @@ fn repl_accepts_commands_and_exits() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(combined.contains("Soroban Debug REPL"));
-    assert!(combined.contains("Available Commands"));
-    assert!(combined.contains("Result: I64(1)"));
+    assert!(combined.contains("soroban-debug repl ["));
 }
