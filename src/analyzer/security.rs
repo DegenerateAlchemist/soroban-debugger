@@ -20,6 +20,42 @@ pub struct SecurityFinding {
     pub location: String,
     pub description: String,
     pub remediation: String,
+    pub confidence: Option<FindingConfidence>,
+    pub context: Option<FindingContext>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FindingConfidence {
+    pub level: ConfidenceLevel,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConfidenceLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FindingContext {
+    pub control_flow_info: Option<ControlFlowContext>,
+    pub storage_call_pattern: Option<StorageCallPattern>,
+    pub loop_nesting_depth: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlFlowContext {
+    pub loop_types: Vec<String>,
+    pub block_types: Vec<String>,
+    pub conditional_branches: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageCallPattern {
+    pub calls_in_loops: usize,
+    pub calls_outside_loops: usize,
+    pub loop_types_with_calls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -204,10 +240,10 @@ impl SecurityRule for HardcodedAddressRule {
                                 severity: Severity::Medium,
                                 location: "Data Section".to_string(),
                                 description: format!("Found potential hardcoded address: {}", word),
-                                remediation:
-                                    "Use Address::from_str from configuration or function \
-                                     arguments instead of hardcoding."
-                                        .to_string(),
+                                remediation: "Use Address::from_str from configuration or function \
+                                     arguments instead of hardcoding.".to_string(),
+                                confidence: None,
+                                context: None,
                             });
                         }
                     }
@@ -239,6 +275,8 @@ impl SecurityRule for ArithmeticCheckRule {
                     location: format!("Instruction {}", i),
                     description: format!("Unchecked arithmetic operation detected: {:?}", instr),
                     remediation: "Ensure arithmetic operations are guarded with proper bounds checks or overflow handling.".to_string(),
+                    confidence: None,
+                    context: None,
                 });
             }
         }
@@ -321,6 +359,8 @@ impl SecurityRule for AuthorizationCheckRule {
                 location: "Dynamic trace".to_string(),
                 description: "Storage mutation detected without an authorization event in the execution trace.".to_string(),
                 remediation: "Ensure all sensitive functions call `address.require_auth()` before mutating state.".to_string(),
+                confidence: None,
+                context: None,
             });
         }
 
@@ -373,6 +413,8 @@ fn analyze_reentrancy_dynamic(trace: &[DynamicTraceEvent]) -> Vec<SecurityFindin
                         location: format!("Trace event {}", entry.sequence),
                         description: "Storage write detected after an external contract call in the same call frame. Possible reentrancy risk.".to_string(),
                         remediation: "Follow checks-effects-interactions: finalize state before external calls.".to_string(),
+                        confidence: None,
+                        context: None,
                     }];
                 }
             }
@@ -432,6 +474,8 @@ impl SecurityRule for CrossContractImportRule {
                     matches.join(", ")
                 ),
                 remediation: "Review external call sites for reentrancy and authorization checks.".to_string(),
+                confidence: None,
+                context: None,
             }]
         )
     }
@@ -500,18 +544,43 @@ impl SecurityRule for UnboundedIterationRule {
             return Ok(Vec::new());
         }
 
-        Ok(
-            vec![SecurityFinding {
-                rule_id: self.name().to_string(),
-                severity: Severity::High,
-                location: "WASM code section".to_string(),
-                description: format!(
-                    "Detected loop(s) with storage-read host calls ({} storage calls while inside loop).",
-                    analysis.storage_calls_inside_loops
-                ),
-                remediation: "Bound iteration over storage-backed collections (pagination, explicit limits, or capped batch size).".to_string(),
-            }]
-        )
+        let mut finding = SecurityFinding {
+            rule_id: self.name().to_string(),
+            severity: Severity::High,
+            location: "WASM code section".to_string(),
+            description: format!(
+                "Detected loop(s) with storage-read host calls ({} storage calls while inside loop).",
+                analysis.storage_calls_inside_loops
+            ),
+            remediation: "Bound iteration over storage-backed collections (pagination, explicit limits, or capped batch size).".to_string(),
+            confidence: analysis.confidence,
+            context: analysis.context,
+        };
+
+        // Enhance description with additional context if available
+        if let Some(context) = &finding.context {
+            if let Some(pattern) = &context.storage_call_pattern {
+                if pattern.calls_outside_loops > 0 {
+                    finding.description = format!(
+                        "{} Also found {} storage calls outside loops (may indicate mixed access patterns).",
+                        finding.description,
+                        pattern.calls_outside_loops
+                    );
+                }
+            }
+
+            if let Some(depth) = context.loop_nesting_depth {
+                if depth > 1 {
+                    finding.description = format!(
+                        "{} Loop nesting depth: {} (increased complexity).",
+                        finding.description,
+                        depth
+                    );
+                }
+            }
+        }
+
+        Ok(vec![finding])
     }
 
     fn analyze_dynamic(
@@ -535,14 +604,50 @@ impl SecurityRule for UnboundedIterationRule {
 struct UnboundedStaticSignal {
     suspicious: bool,
     storage_calls_inside_loops: usize,
+    confidence: Option<FindingConfidence>,
+    context: Option<FindingContext>,
+    loop_types: Vec<String>,
+    max_nesting_depth: usize,
+}
+
+#[derive(Debug, Clone)]
+enum ControlFlowFrame {
+    Loop {
+        loop_type: String,
+        depth: usize,
+    },
+    Block {
+        block_type: String,
+    },
+    If {
+        has_else: bool,
+    },
+}
+
+impl ControlFlowFrame {
+    fn is_loop(&self) -> bool {
+        matches!(self, ControlFlowFrame::Loop { .. })
+    }
+
+    fn loop_type(&self) -> Option<&str> {
+        match self {
+            ControlFlowFrame::Loop { loop_type, .. } => Some(loop_type),
+            _ => None,
+        }
+    }
 }
 
 fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSignal {
     let mut storage_import_indices = HashSet::new();
     let mut imported_func_count = 0u32;
-    let mut loop_depth = 0usize;
-    let mut block_stack: Vec<bool> = Vec::new(); // true for loop blocks, false for other blocks
+    let mut control_flow_stack: Vec<ControlFlowFrame> = Vec::new();
     let mut signal = UnboundedStaticSignal::default();
+
+    let mut storage_calls_in_loops = 0usize;
+    let mut storage_calls_outside_loops = 0usize;
+    let mut loop_types_with_calls: HashSet<String> = HashSet::new();
+    let mut loop_types_seen: HashSet<String> = HashSet::new();
+    let mut conditional_branches = 0usize;
 
     for payload in Parser::new(0).parse_all(wasm_bytes) {
         let Ok(payload) = payload else {
@@ -564,6 +669,7 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
                 let Ok(mut operators) = body.get_operators_reader() else {
                     continue;
                 };
+
                 while !operators.eof() {
                     let Ok(op) = operators.read() else {
                         break;
@@ -571,25 +677,78 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
 
                     match op {
                         Operator::Loop { .. } => {
-                            loop_depth += 1;
-                            block_stack.push(true); // true indicates this is a loop block
+                            let current_depth = control_flow_stack
+                                .iter()
+                                .filter(|f| f.is_loop())
+                                .count();
+                            let loop_type = (
+                                if current_depth > 0 {
+                                    "nested_loop"
+                                } else {
+                                    "top_level_loop"
+                                }
+                            ).to_string();
+                            loop_types_seen.insert(loop_type.clone());
+
+                            control_flow_stack.push(ControlFlowFrame::Loop {
+                                loop_type: loop_type.clone(),
+                                depth: current_depth,
+                            });
+                            signal.max_nesting_depth = signal.max_nesting_depth.max(
+                                current_depth + 1
+                            );
                         }
-                        Operator::Block { .. } | Operator::If { .. } => {
-                            block_stack.push(false); // false indicates this is not a loop block
+                        Operator::Block { .. } => {
+                            control_flow_stack.push(ControlFlowFrame::Block {
+                                block_type: "block".to_string(),
+                            });
                         }
-                        Operator::End => {
-                            if let Some(is_loop) = block_stack.pop() {
-                                // Only decrement loop_depth if we're ending a loop block
-                                if is_loop {
-                                    loop_depth = loop_depth.saturating_sub(1);
+                        Operator::If { .. } => {
+                            conditional_branches += 1;
+                            control_flow_stack.push(ControlFlowFrame::If { has_else: false });
+                        }
+                        Operator::Else => {
+                            if let Some(frame) = control_flow_stack.last_mut() {
+                                if let ControlFlowFrame::If { .. } = frame {
+                                    *frame = ControlFlowFrame::If { has_else: true };
                                 }
                             }
                         }
-                        Operator::Call { function_index } if
-                            loop_depth > 0 &&
-                            storage_import_indices.contains(&function_index)
-                        => {
-                            signal.storage_calls_inside_loops += 1;
+                        Operator::End => {
+                            if let Some(frame) = control_flow_stack.pop() {
+                                if frame.is_loop() {
+                                    signal.max_nesting_depth =
+                                        signal.max_nesting_depth.saturating_sub(1);
+                                }
+                            }
+                        }
+                        Operator::Call { function_index } => {
+                            let is_storage_call = storage_import_indices.contains(&function_index);
+                            let current_loop_depth = control_flow_stack
+                                .iter()
+                                .filter(|f| f.is_loop())
+                                .count();
+
+                            if is_storage_call {
+                                if current_loop_depth > 0 {
+                                    storage_calls_in_loops += 1;
+                                    if
+                                        let Some(loop_frame) = control_flow_stack
+                                            .iter()
+                                            .rev()
+                                            .find(|f| f.is_loop())
+                                    {
+                                        if let Some(loop_type) = loop_frame.loop_type() {
+                                            loop_types_with_calls.insert(loop_type.to_string());
+                                        }
+                                    }
+                                } else {
+                                    storage_calls_outside_loops += 1;
+                                }
+                            }
+                        }
+                        Operator::BrIf { .. } => {
+                            conditional_branches += 1;
                         }
                         _ => {}
                     }
@@ -599,7 +758,49 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
         }
     }
 
-    signal.suspicious = signal.storage_calls_inside_loops > 0;
+    signal.storage_calls_inside_loops = storage_calls_in_loops;
+    signal.loop_types = loop_types_seen.into_iter().collect();
+
+    // Calculate confidence based on multiple factors
+    let confidence_level = if storage_calls_in_loops > 0 {
+        if signal.max_nesting_depth > 2 && storage_calls_in_loops > 3 {
+            ConfidenceLevel::High
+        } else if signal.max_nesting_depth > 1 || storage_calls_in_loops > 1 {
+            ConfidenceLevel::Medium
+        } else {
+            ConfidenceLevel::Low
+        }
+    } else {
+        ConfidenceLevel::Low
+    };
+
+    let confidence_rationale = format!(
+        "Storage calls in loops: {}, max nesting depth: {}, loop types with calls: {:?}",
+        storage_calls_in_loops,
+        signal.max_nesting_depth,
+        loop_types_with_calls
+    );
+
+    signal.confidence = Some(FindingConfidence {
+        level: confidence_level,
+        rationale: confidence_rationale,
+    });
+
+    signal.context = Some(FindingContext {
+        control_flow_info: Some(ControlFlowContext {
+            loop_types: signal.loop_types.clone(),
+            block_types: vec!["block".to_string()],
+            conditional_branches,
+        }),
+        storage_call_pattern: Some(StorageCallPattern {
+            calls_in_loops: storage_calls_in_loops,
+            calls_outside_loops: storage_calls_outside_loops,
+            loop_types_with_calls: loop_types_with_calls.into_iter().collect(),
+        }),
+        loop_nesting_depth: Some(signal.max_nesting_depth),
+    });
+
+    signal.suspicious = storage_calls_in_loops > 0;
     signal
 }
 
@@ -675,6 +876,8 @@ fn analyze_unbounded_iteration_dynamic(trace: &[DynamicTraceEvent]) -> Option<Se
             max_reads_for_one_key
         ),
         remediation: "Use explicit iteration bounds and pagination for storage traversal to avoid gas-denial risks.".to_string(),
+        confidence: None,
+        context: None,
     })
 }
 
@@ -729,28 +932,16 @@ mod tests {
     #[test]
     fn strkey_accepts_well_formed_g_address() {
         let addr = build_strkey(6 << 3, &[0u8; 32]);
-        assert!(
-            addr.starts_with('G'),
-            "sanity: version 0x30 encodes to 'G' prefix"
-        );
-        assert!(
-            is_valid_strkey(&addr),
-            "well-formed G address must be accepted"
-        );
+        assert!(addr.starts_with('G'), "sanity: version 0x30 encodes to 'G' prefix");
+        assert!(is_valid_strkey(&addr), "well-formed G address must be accepted");
     }
 
     /// Same for the contract ('C') variant.
     #[test]
     fn strkey_accepts_well_formed_c_address() {
         let addr = build_strkey(2 << 3, &[0u8; 32]);
-        assert!(
-            addr.starts_with('C'),
-            "sanity: version 0x10 encodes to 'C' prefix"
-        );
-        assert!(
-            is_valid_strkey(&addr),
-            "well-formed C address must be accepted"
-        );
+        assert!(addr.starts_with('C'), "sanity: version 0x10 encodes to 'C' prefix");
+        assert!(is_valid_strkey(&addr), "well-formed C address must be accepted");
     }
 
     /// 56 uppercase-ASCII chars starting with 'G' but with all-'A' payload have
@@ -772,7 +963,7 @@ mod tests {
         // Contains '0', '1', and lower-case letters — all outside A-Z/2-7.
         let bad_chars = "G0001111abcdefghABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDE";
         assert_eq!(bad_chars.len(), 53); // not 56, show next case is the real one
-                                         // Craft exactly 56 chars with an invalid char ('0') at position 1.
+        // Craft exactly 56 chars with an invalid char ('0') at position 1.
         let with_zero = "G0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         assert_eq!(with_zero.len(), 56);
         assert!(!is_valid_strkey(with_zero), "token with '0' must be rejected");
@@ -782,12 +973,8 @@ mod tests {
     /// regardless of prefix.
     #[test]
     fn strkey_rejects_wrong_length() {
-        assert!(!is_valid_strkey(
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        )); // 55
-        assert!(!is_valid_strkey(
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        )); // 57
+        assert!(!is_valid_strkey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")); // 55
+        assert!(!is_valid_strkey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")); // 57
         assert!(!is_valid_strkey("")); // empty
     }
 
@@ -882,9 +1069,7 @@ mod tests {
                 continue; // shorter than 56 — would not be picked up anyway
             }
             let wasm = wasm_with_data_string(&t);
-            let findings = rule
-                .analyze_static(&wasm)
-                .expect("analyze_static should not error");
+            let findings = rule.analyze_static(&wasm).expect("analyze_static should not error");
             assert!(
                 findings.is_empty(),
                 "token '{}' must not produce a finding (not a valid StrKey): {:?}",
@@ -904,9 +1089,7 @@ mod tests {
 
         let wasm = wasm_with_data_string(&valid_addr);
         let rule = HardcodedAddressRule;
-        let findings = rule
-            .analyze_static(&wasm)
-            .expect("analyze_static should not error");
+        let findings = rule.analyze_static(&wasm).expect("analyze_static should not error");
 
         assert_eq!(findings.len(), 1, "exactly one finding expected for a valid hardcoded address");
         assert_eq!(findings[0].rule_id, "hardcoded-address");
@@ -927,9 +1110,7 @@ mod tests {
 
         let wasm = wasm_with_data_string(&payload);
         let rule = HardcodedAddressRule;
-        let findings = rule
-            .analyze_static(&wasm)
-            .expect("analyze_static should not error");
+        let findings = rule.analyze_static(&wasm).expect("analyze_static should not error");
 
         assert_eq!(
             findings.len(),
@@ -972,7 +1153,7 @@ mod tests {
         let instrs = vec![
             WasmInstruction::I32Add,
             WasmInstruction::Unknown(0x41),
-            WasmInstruction::BrIf,
+            WasmInstruction::BrIf
         ];
         assert!(ArithmeticCheckRule::is_guarded(&instrs, 0));
     }
@@ -984,11 +1165,11 @@ mod tests {
         // idx=0, window covers idx+1..idx+4 (indices 1, 2, 3).
         // BrIf is at index 4, which is outside the window.
         let instrs = vec![
-            WasmInstruction::I32Add,   // idx 0
+            WasmInstruction::I32Add, // idx 0
             WasmInstruction::Unknown(0x41), // idx 1
             WasmInstruction::Unknown(0x41), // idx 2
             WasmInstruction::Unknown(0x41), // idx 3
-            WasmInstruction::BrIf,     // idx 4 — outside window
+            WasmInstruction::BrIf // idx 4 — outside window
         ];
         assert!(!ArithmeticCheckRule::is_guarded(&instrs, 0));
     }
@@ -1061,7 +1242,7 @@ mod tests {
     fn reentrancy_no_finding_for_write_in_callee_frame() {
         let trace = vec![
             make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
-            make_event(1, DynamicTraceEventKind::StorageWrite, 1),
+            make_event(1, DynamicTraceEventKind::StorageWrite, 1)
         ];
         assert!(
             analyze_reentrancy_dynamic(&trace).is_empty(),
@@ -1078,7 +1259,7 @@ mod tests {
             make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
             make_event(1, DynamicTraceEventKind::StorageWrite, 1),
             make_event(2, DynamicTraceEventKind::CrossContractReturn, 0),
-            make_event(3, DynamicTraceEventKind::StorageWrite, 0),
+            make_event(3, DynamicTraceEventKind::StorageWrite, 0)
         ];
         assert!(
             analyze_reentrancy_dynamic(&trace).is_empty(),
@@ -1094,7 +1275,7 @@ mod tests {
             make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
             make_event(1, DynamicTraceEventKind::StorageWrite, 1),
             make_event(2, DynamicTraceEventKind::CrossContractReturn, 0),
-            make_event(3, DynamicTraceEventKind::StorageWrite, 0),
+            make_event(3, DynamicTraceEventKind::StorageWrite, 0)
         ];
         assert!(
             analyze_reentrancy_dynamic(&trace).is_empty(),
@@ -1108,10 +1289,14 @@ mod tests {
     fn reentrancy_finding_for_write_in_same_frame_after_cross_call() {
         let trace = vec![
             make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
-            make_event(1, DynamicTraceEventKind::StorageWrite, 0),
+            make_event(1, DynamicTraceEventKind::StorageWrite, 0)
         ];
         let findings = analyze_reentrancy_dynamic(&trace);
-        assert_eq!(findings.len(), 1, "write in same frame after cross-contract call must be flagged");
+        assert_eq!(
+            findings.len(),
+            1,
+            "write in same frame after cross-contract call must be flagged"
+        );
         assert_eq!(findings[0].rule_id, "reentrancy-pattern");
     }
 
