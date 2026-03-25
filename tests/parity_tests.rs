@@ -4,7 +4,7 @@
 //! Each test is annotated with which surface(s) it validates:
 //!   - CLI: exercised via the soroban-debug binary directly
 //!   - DAP: exercised via the soroban-debug server TCP protocol
-//!       (the same path the VS Code extension uses internally)
+//!     (the same path the VS Code extension uses internally)
 //!
 //! Functional acceptance tests (flag is parsed without "unrecognized argument"
 //! error) use a temporary dummy WASM file so no built fixture is required.
