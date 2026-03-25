@@ -379,6 +379,81 @@ expected_error = "unauthorized"
 }
 
 #[test]
+fn symbolic_seed_flag_prints_replay_token() {
+    let wasm = fixture_wasm("counter");
+
+    base_cmd()
+        .args([
+            "symbolic",
+            "--contract",
+            wasm.to_str().unwrap(),
+            "--function",
+            "increment",
+            "--seed",
+            "42",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Replay token: 42"));
+}
+
+#[test]
+fn symbolic_replay_flag_is_equivalent_to_seed() {
+    let wasm = fixture_wasm("counter");
+
+    base_cmd()
+        .args([
+            "symbolic",
+            "--contract",
+            wasm.to_str().unwrap(),
+            "--function",
+            "increment",
+            "--replay",
+            "42",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Replay token: 42"));
+}
+
+#[test]
+fn symbolic_seed_and_replay_are_mutually_exclusive() {
+    let wasm = fixture_wasm("counter");
+
+    base_cmd()
+        .args([
+            "symbolic",
+            "--contract",
+            wasm.to_str().unwrap(),
+            "--function",
+            "increment",
+            "--seed",
+            "1",
+            "--replay",
+            "2",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn symbolic_without_seed_prints_replay_token_none() {
+    let wasm = fixture_wasm("counter");
+
+    base_cmd()
+        .args([
+            "symbolic",
+            "--contract",
+            wasm.to_str().unwrap(),
+            "--function",
+            "increment",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Replay token: none"));
+}
+
+#[test]
 fn scenario_captures_step_output_and_uses_in_expected_return() {
     let wasm = fixture_wasm("counter");
     let scenario = NamedTempFile::new().unwrap();

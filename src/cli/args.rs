@@ -767,6 +767,85 @@ mod tests {
         assert_eq!(args.path_cap, Some(200));
         assert_eq!(args.timeout, Some(45));
     }
+
+    #[test]
+    fn symbolic_accepts_seed_flag() {
+        let cli = Cli::parse_from([
+            "soroban-debug",
+            "symbolic",
+            "--contract",
+            "contract.wasm",
+            "--function",
+            "increment",
+            "--seed",
+            "42",
+        ]);
+
+        let Commands::Symbolic(args) = cli.command.expect("symbolic command expected") else {
+            panic!("symbolic command expected");
+        };
+
+        assert_eq!(args.seed, Some(42));
+        assert_eq!(args.replay, None);
+    }
+
+    #[test]
+    fn symbolic_accepts_replay_flag() {
+        let cli = Cli::parse_from([
+            "soroban-debug",
+            "symbolic",
+            "--contract",
+            "contract.wasm",
+            "--function",
+            "increment",
+            "--replay",
+            "99",
+        ]);
+
+        let Commands::Symbolic(args) = cli.command.expect("symbolic command expected") else {
+            panic!("symbolic command expected");
+        };
+
+        assert_eq!(args.replay, Some(99));
+        assert_eq!(args.seed, None);
+    }
+
+    #[test]
+    fn symbolic_seed_and_replay_conflict() {
+        let result = Cli::try_parse_from([
+            "soroban-debug",
+            "symbolic",
+            "--contract",
+            "contract.wasm",
+            "--function",
+            "increment",
+            "--seed",
+            "1",
+            "--replay",
+            "2",
+        ]);
+
+        assert!(result.is_err(), "--seed and --replay should be mutually exclusive");
+    }
+
+    #[test]
+    fn symbolic_no_seed_or_replay_defaults_to_none() {
+        let cli = Cli::parse_from([
+            "soroban-debug",
+            "symbolic",
+            "--contract",
+            "contract.wasm",
+            "--function",
+            "increment",
+        ]);
+
+        let Commands::Symbolic(args) = cli.command.expect("symbolic command expected") else {
+            panic!("symbolic command expected");
+        };
+
+        assert_eq!(args.seed, None);
+        assert_eq!(args.replay, None);
+    }
 }
 
 #[derive(Parser)]
@@ -888,6 +967,19 @@ pub struct SymbolicArgs {
     /// Overall symbolic analysis timeout in seconds
     #[arg(long, value_name = "SECONDS")]
     pub timeout: Option<u64>,
+
+    /// Seed the exploration order with this integer so the run is fully
+    /// reproducible.  The emitted "Replay token" value can be passed here
+    /// or to `--replay` on any subsequent run to reproduce the exact same
+    /// path ordering.  Mutually exclusive with `--replay`.
+    #[arg(long, value_name = "N", conflicts_with = "replay")]
+    pub seed: Option<u64>,
+
+    /// Replay a previous symbolic run by providing its replay token (the seed
+    /// value printed at the end of the original run).  Equivalent to
+    /// `--seed <TOKEN>`.  Mutually exclusive with `--seed`.
+    #[arg(long, value_name = "TOKEN", conflicts_with = "seed")]
+    pub replay: Option<u64>,
 }
 
 #[derive(Parser)]

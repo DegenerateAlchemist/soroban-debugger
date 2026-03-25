@@ -215,6 +215,48 @@ The batch args file should contain a JSON array of test cases:
 
 See [docs/batch-execution.md](https://github.com/Timi16/soroban-debugger/blob/main/docs/batch-execution.md) for detailed documentation.
 
+### Symbolic Command
+
+Run symbolic execution to explore the contract's input space:
+
+```bash
+soroban-debug symbolic --contract my_contract.wasm --function my_func
+```
+
+#### Deterministic Seed and Replay Mode
+
+By default the exploration order is fixed (deterministic cartesian product). You can shuffle it
+with a seed to explore a different path set while still being able to reproduce the run exactly:
+
+```bash
+# Lock the exploration order with an explicit seed.
+soroban-debug symbolic --contract token.wasm --function transfer --seed 42
+
+# Output includes a replay token:
+# Replay token: 42 (reproduce with --replay 42)
+
+# Reproduce the identical run later (--replay is an alias for --seed):
+soroban-debug symbolic --contract token.wasm --function transfer --replay 42
+```
+
+The replay token is also embedded in the `--output` TOML file under `[metadata]` as `seed = 42`.
+Pass `--replay <token>` to any team member or CI job to reproduce a finding exactly.
+
+`--seed` and `--replay` are mutually exclusive (both set the same underlying seed; `--replay` is
+the user-facing name for the value printed in the report).
+
+#### Symbolic Options
+
+| Flag | Description |
+|------|-------------|
+| `--profile fast\|balanced\|deep` | Preset exploration budget |
+| `--path-cap N` | Max number of input combinations to execute |
+| `--input-combination-cap N` | Max number of input combinations to generate |
+| `--timeout SECONDS` | Overall analysis timeout |
+| `--seed N` | Shuffle exploration order with this seed (reproducible) |
+| `--replay TOKEN` | Reproduce a previous run using its replay token |
+| `--output FILE` | Write scenario TOML (includes seed in `[metadata]`) |
+
 ### Scenario Command
 
 Run a multi-step test scenario defined in a TOML file:

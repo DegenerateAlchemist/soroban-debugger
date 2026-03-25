@@ -106,6 +106,16 @@ fn render_symbolic_report(report: &crate::analyzer::symbolic::SymbolicReport) ->
         ));
     }
 
+    match report.metadata.seed {
+        Some(seed) => lines.push(format!(
+            "Replay token: {} (reproduce with --replay {})",
+            seed, seed
+        )),
+        None => lines.push(
+            "Replay token: none (add --seed <N> to lock the exploration order)".to_string(),
+        ),
+    }
+
     if report.paths.is_empty() {
         lines.push("No distinct execution paths were discovered.".to_string());
         return lines.join("\n");
@@ -150,6 +160,8 @@ fn symbolic_config_from_args(args: &SymbolicArgs) -> SymbolicConfig {
     if let Some(timeout) = args.timeout {
         config.timeout_secs = timeout;
     }
+    // --replay is a user-facing alias for --seed (both set the exploration seed).
+    config.seed = args.seed.or(args.replay);
     config
 }
 
