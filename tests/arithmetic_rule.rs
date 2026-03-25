@@ -79,7 +79,10 @@ fn test_ignores_call_guarded_arithmetic() {
         .iter()
         .filter(|f| f.rule_id == "arithmetic-overflow")
         .collect();
-    assert!(!arithmetic_findings.is_empty(), "Call should not suppress arithmetic finding");
+    assert!(
+        !arithmetic_findings.is_empty(),
+        "Call should not suppress arithmetic finding"
+    );
 }
 
 #[test]
