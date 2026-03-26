@@ -496,7 +496,11 @@ impl SymbolicAnalyzer {
         .unwrap();
         match report.metadata.seed {
             Some(seed) => writeln!(toml, "seed = {}", seed).unwrap(),
-            None => writeln!(toml, "# seed = <none> (add --seed N for reproducible shuffled order)").unwrap(),
+            None => writeln!(
+                toml,
+                "# seed = <none> (add --seed N for reproducible shuffled order)"
+            )
+            .unwrap(),
         }
         if !report.metadata.truncation_reasons.is_empty() {
             writeln!(toml, "truncation_reasons = [").unwrap();
@@ -632,6 +636,7 @@ mod tests {
                 truncated_by_path_cap: false,
                 truncated_by_timeout: false,
                 truncation_reasons: Vec::new(),
+                seed: None,
             },
         };
         let mut seen_inputs = HashSet::new();
@@ -661,6 +666,7 @@ mod tests {
                 truncated_by_path_cap: false,
                 truncated_by_timeout: false,
                 truncation_reasons: Vec::new(),
+                seed: None,
             },
         };
         let mut seen_inputs = HashSet::new();
@@ -738,7 +744,10 @@ mod tests {
         let mut b = original.clone();
         seeded_shuffle(&mut b, 2);
 
-        assert_ne!(a, b, "different seeds should (almost always) yield different orders");
+        assert_ne!(
+            a, b,
+            "different seeds should (almost always) yield different orders"
+        );
     }
 
     #[test]
@@ -751,14 +760,24 @@ mod tests {
             timeout_secs: 30,
             seed: Some(99),
         };
-        let config_b = SymbolicConfig { seed: Some(99), ..config_a.clone() };
+        let config_b = SymbolicConfig {
+            seed: Some(99),
+            ..config_a.clone()
+        };
 
-        let report_a = analyzer.analyze_with_config(&wasm, "entry", &config_a).unwrap();
-        let report_b = analyzer.analyze_with_config(&wasm, "entry", &config_b).unwrap();
+        let report_a = analyzer
+            .analyze_with_config(&wasm, "entry", &config_a)
+            .unwrap();
+        let report_b = analyzer
+            .analyze_with_config(&wasm, "entry", &config_b)
+            .unwrap();
 
         let inputs_a: Vec<_> = report_a.paths.iter().map(|p| p.inputs.clone()).collect();
         let inputs_b: Vec<_> = report_b.paths.iter().map(|p| p.inputs.clone()).collect();
-        assert_eq!(inputs_a, inputs_b, "same seed must produce the same exploration order");
+        assert_eq!(
+            inputs_a, inputs_b,
+            "same seed must produce the same exploration order"
+        );
         assert_eq!(report_a.metadata.seed, Some(99));
     }
 
@@ -773,7 +792,9 @@ mod tests {
             seed: None,
         };
 
-        let report = analyzer.analyze_with_config(&wasm, "entry", &config).unwrap();
+        let report = analyzer
+            .analyze_with_config(&wasm, "entry", &config)
+            .unwrap();
         assert_eq!(report.metadata.seed, None);
     }
 
@@ -800,6 +821,7 @@ mod tests {
                 truncation_reasons: vec![
                     "input combination cap reached at 64 generated combinations".to_string(),
                 ],
+                seed: None,
             },
         };
 

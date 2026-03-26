@@ -47,11 +47,7 @@ impl FlameGraphGenerator {
                     stacks.push(FlameGraphStack {
                         stack: vec![
                             function.name.clone(),
-                            format!(
-                                "storage;key{};access_count={}",
-                                idx,
-                                access.access_count
-                            ),
+                            format!("storage;key{};access_count={}", idx, access.access_count),
                         ],
                         count: access_count,
                     });
@@ -82,8 +78,9 @@ impl FlameGraphGenerator {
         opts.min_width = height as f64;
 
         let mut svg = Vec::new();
-        inferno::flamegraph::from_reader(&mut opts, reader, &mut svg)
-            .map_err(|e| crate::DebuggerError::ExecutionError(format!("Flamegraph render error: {e}")))?;
+        inferno::flamegraph::from_reader(&mut opts, reader, &mut svg).map_err(|e| {
+            crate::DebuggerError::ExecutionError(format!("Flamegraph render error: {e}"))
+        })?;
 
         String::from_utf8(svg)
             .map_err(|e| crate::DebuggerError::ExecutionError(format!("UTF-8 error: {e}")).into())

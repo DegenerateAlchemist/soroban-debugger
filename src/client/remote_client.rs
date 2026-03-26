@@ -669,7 +669,9 @@ fn backoff_delay(base: Duration, max: Duration, attempt: usize) -> Duration {
         return base.min(max);
     }
 
-    let exp = 1u32.checked_shl((attempt - 1).min(31) as u32).unwrap_or(u32::MAX);
+    let exp = 1u32
+        .checked_shl((attempt - 1).min(31) as u32)
+        .unwrap_or(u32::MAX);
     let delay = base.checked_mul(exp).unwrap_or(max).min(max);
     delay
 }
@@ -745,6 +747,35 @@ mod tests {
         assert!(err.to_string().contains("Network/transport error"));
     }
 
+    /// Respond to a handshake then stall on the next request (for timeout tests).
+    fn accept_handshake_then_stall(stream: &mut std::net::TcpStream) {
+        use std::io::Write;
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        let _ = reader.read_line(&mut line);
+        if let Ok(msg) = serde_json::from_str::<DebugMessage>(line.trim_end()) {
+            let ack = DebugMessage::response(
+                msg.id,
+                DebugResponse::HandshakeAck {
+                    server_name: "test".into(),
+                    server_version: "0.0.0".into(),
+                    protocol_min: 1,
+                    protocol_max: 1,
+                    selected_version: 1,
+                },
+            );
+            if let Ok(json) = serde_json::to_string(&ack) {
+                let _ = writeln!(stream, "{}", json);
+                let _ = stream.flush();
+            }
+        }
+        // Read the ping request but never respond — simulates timeout.
+        let mut reader2 = BufReader::new(stream.try_clone().unwrap());
+        let mut _ping_line = String::new();
+        let _ = reader2.read_line(&mut _ping_line);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
     #[test]
     fn ping_times_out_deterministically() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -752,11 +783,7 @@ mod tests {
 
         std::thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
-                // Consume one request line but never respond.
-                let mut reader = BufReader::new(&mut stream);
-                let mut line = String::new();
-                let _ = reader.read_line(&mut line);
-                std::thread::sleep(Duration::from_millis(200));
+                accept_handshake_then_stall(&mut stream);
             }
         });
 
@@ -787,25 +814,47 @@ mod tests {
 
         std::thread::spawn(move || {
             for stream in listener.incoming().take(2) {
+                use std::io::Write;
                 let mut stream = stream.unwrap();
                 let attempt = seen_server.fetch_add(1, Ordering::SeqCst);
 
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut line = String::new();
-                let _ = reader.read_line(&mut line);
-
                 if attempt == 0 {
-                    // Drop connection without responding.
+                    // First connection: service handshake so connect_with_config succeeds,
+                    // then drop — client retries the ping via reconnect() which skips handshake.
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut hs_line = String::new();
+                    let _ = reader.read_line(&mut hs_line);
+                    if let Ok(hs_msg) = serde_json::from_str::<DebugMessage>(hs_line.trim_end()) {
+                        let ack = DebugMessage::response(
+                            hs_msg.id,
+                            DebugResponse::HandshakeAck {
+                                server_name: "test".into(),
+                                server_version: "0.0.0".into(),
+                                protocol_min: 1,
+                                protocol_max: 1,
+                                selected_version: 1,
+                            },
+                        );
+                        if let Ok(json) = serde_json::to_string(&ack) {
+                            let _ = writeln!(stream, "{}", json);
+                            let _ = stream.flush();
+                        }
+                    }
+                    // Drop the stream — the pending ping will error, triggering a retry.
                     drop(stream);
-                    continue;
+                } else {
+                    // Second connection (after reconnect): reconnect() does NOT redo handshake,
+                    // so the first message from the client is the ping.
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut ping_line = String::new();
+                    let _ = reader.read_line(&mut ping_line);
+                    if let Ok(msg) = serde_json::from_str::<DebugMessage>(ping_line.trim_end()) {
+                        let response = DebugMessage::response(msg.id, DebugResponse::Pong);
+                        let json = serde_json::to_string(&response).unwrap();
+                        let _ = writeln!(stream, "{}", json);
+                        let _ = stream.flush();
+                    }
                 }
-
-                let msg: DebugMessage = serde_json::from_str(line.trim_end()).unwrap();
-                let id = msg.id;
-                let response = DebugMessage::response(id, DebugResponse::Pong);
-                let json = serde_json::to_string(&response).unwrap();
-                let _ = writeln!(stream, "{}", json);
-                let _ = stream.flush();
             }
         });
 

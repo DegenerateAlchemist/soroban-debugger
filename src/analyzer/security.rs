@@ -88,7 +88,7 @@ impl SecurityAnalyzer {
 
         for rule in &self.rules {
             let name = rule.name();
-            
+
             if !filter.enable_rules.is_empty() && !filter.enable_rules.iter().any(|r| r == name) {
                 continue;
             }
@@ -272,21 +272,63 @@ impl SecurityRule for ArithmeticCheckRule {
         let instructions = parse_instructions(wasm_bytes);
 
         for (i, instr) in instructions.iter().enumerate() {
-            if Self::is_arithmetic(instr) && !Self::is_guarded(&instructions, i) {
-                findings.push(SecurityFinding {
-                    rule_id: self.name().to_string(),
-                    severity: Severity::Medium,
-                    location: format!("Instruction {}", i),
-                    description: format!("Unchecked arithmetic operation detected: {:?}", instr),
-                    remediation: "Ensure arithmetic operations are guarded with proper bounds checks or overflow handling.".to_string(),
-                    confidence: None,
-                    rationale: None,
-                });
+            if !Self::is_arithmetic(instr) {
+                continue;
             }
+
+            // Classify the guard pattern after this arithmetic instruction and assign
+            // confidence + description accordingly.
+            let (confidence, guard_desc, rationale) =
+                match Self::classify_guard(&instructions, i) {
+                    GuardKind::FullGuard => continue, // comparison drives branch → suppressed
+                    GuardKind::CompareNoBranch => (
+                        0.70f32,
+                        "Confidence: medium | comparison found but does not drive conditional control flow",
+                        "A comparison instruction was found after the arithmetic but its result does not feed a conditional branch.",
+                    ),
+                    GuardKind::BranchNoCompare => (
+                        0.40f32,
+                        "Confidence: low | no recognized compare-and-branch guard",
+                        "A branch instruction was found after the arithmetic but without a preceding comparison.",
+                    ),
+                    GuardKind::NoGuard => (
+                        0.95f32,
+                        "Confidence: high | No comparison-derived conditional branch",
+                        "No guard pattern was found after the arithmetic instruction.",
+                    ),
+                };
+
+            findings.push(SecurityFinding {
+                rule_id: self.name().to_string(),
+                severity: Severity::Medium,
+                location: format!("Instruction {}", i),
+                description: format!(
+                    "Unchecked arithmetic operation detected: {:?}. {}",
+                    instr, guard_desc
+                ),
+                remediation:
+                    "Ensure arithmetic operations are guarded with proper bounds checks or overflow handling."
+                        .to_string(),
+                confidence: Some(confidence),
+                rationale: Some(rationale.to_string()),
+            });
         }
 
         Ok(findings)
     }
+}
+
+/// Guard classification for arithmetic overflow findings.
+#[derive(Debug)]
+enum GuardKind {
+    /// A comparison instruction drives a conditional branch — fully guarded.
+    FullGuard,
+    /// Comparison present but result not used in a branch.
+    CompareNoBranch,
+    /// Branch present but no preceding comparison instruction.
+    BranchNoCompare,
+    /// No guard pattern detected.
+    NoGuard,
 }
 
 impl ArithmeticCheckRule {
@@ -302,8 +344,9 @@ impl ArithmeticCheckRule {
         )
     }
 
+    #[allow(dead_code)]
     fn is_guarded(instructions: &[WasmInstruction], idx: usize) -> bool {
-        const LOOKAHEAD: usize = 5;
+        const LOOKAHEAD: usize = 3;
         let end = (idx + 1 + LOOKAHEAD).min(instructions.len());
         for instr in &instructions[idx + 1..end] {
             if matches!(instr, WasmInstruction::BrIf | WasmInstruction::If) {
@@ -311,6 +354,37 @@ impl ArithmeticCheckRule {
             }
         }
         false
+    }
+
+    fn is_comparison_instr(instr: &WasmInstruction) -> bool {
+        matches!(instr, WasmInstruction::Unknown(b) if (0x46..=0x4f).contains(b) || (0x51..=0x5a).contains(b))
+    }
+
+    fn classify_guard(instructions: &[WasmInstruction], idx: usize) -> GuardKind {
+        const WINDOW: usize = 15;
+        let end = (idx + 1 + WINDOW).min(instructions.len());
+        let window = &instructions[idx + 1..end];
+
+        let mut compare_pos: Option<usize> = None;
+        let mut branch_pos: Option<usize> = None;
+
+        for (j, instr) in window.iter().enumerate() {
+            if compare_pos.is_none() && Self::is_comparison_instr(instr) {
+                compare_pos = Some(j);
+            }
+            if branch_pos.is_none() && matches!(instr, WasmInstruction::If | WasmInstruction::BrIf)
+            {
+                branch_pos = Some(j);
+            }
+        }
+
+        match (compare_pos, branch_pos) {
+            (Some(cmp), Some(br)) if cmp < br => GuardKind::FullGuard,
+            (Some(_), Some(_)) => GuardKind::BranchNoCompare,
+            (Some(_), None) => GuardKind::CompareNoBranch,
+            (None, Some(_)) => GuardKind::BranchNoCompare,
+            (None, None) => GuardKind::NoGuard,
+        }
     }
 }
 
@@ -746,7 +820,7 @@ fn is_storage_read_import(module: &str, name: &str) -> bool {
         if n.starts_with(base) {
             let _suffix = &n[base.len()..];
         }
-        
+
         if let Some(suffix) = n.strip_prefix(base) {
             if suffix.is_empty() {
                 return true;
@@ -757,7 +831,7 @@ fn is_storage_read_import(module: &str, name: &str) -> bool {
                 }
             }
         }
-        
+
         // Handle prefix-qualified names like "contract_storage_get".
         if n.ends_with(base) {
             return true;
@@ -906,6 +980,14 @@ fn analyze_reentrancy_pattern_dynamic(trace: &[DynamicTraceEvent]) -> Vec<Securi
                     pre_call_write_seen,
                     inferred: active_frame.is_none(),
                 });
+            }
+            DynamicTraceEventKind::CrossContractReturn => {
+                // The callee has returned; any storage write that follows is no longer
+                // "between call and return" and must not be flagged as reentrancy.
+                pending_cross_call = None;
+                if let Some(frame) = active_frame {
+                    last_known_frame = Some(frame);
+                }
             }
             _ => {
                 if let Some(frame) = active_frame {
@@ -1308,7 +1390,7 @@ mod tests {
     // ReentrancyPatternRule — call-frame correlation tests
     // -----------------------------------------------------------------------
 
-    fn make_event(seq: usize, kind: DynamicTraceEventKind, depth: u32) -> DynamicTraceEvent {
+    fn make_event(seq: usize, kind: DynamicTraceEventKind, depth: usize) -> DynamicTraceEvent {
         DynamicTraceEvent {
             sequence: seq,
             kind,
@@ -1316,7 +1398,8 @@ mod tests {
             function: None,
             storage_key: None,
             storage_value: None,
-            call_depth: depth,
+            call_depth: Some(depth),
+            caller: None,
         }
     }
 
@@ -1329,7 +1412,7 @@ mod tests {
             make_event(1, DynamicTraceEventKind::StorageWrite, 1),
         ];
         assert!(
-            analyze_reentrancy_dynamic(&trace).is_empty(),
+            analyze_reentrancy_pattern_dynamic(&trace).is_empty(),
             "write in callee frame must not be flagged as reentrancy"
         );
     }
@@ -1346,7 +1429,7 @@ mod tests {
             make_event(3, DynamicTraceEventKind::StorageWrite, 0),
         ];
         assert!(
-            analyze_reentrancy_dynamic(&trace).is_empty(),
+            analyze_reentrancy_pattern_dynamic(&trace).is_empty(),
             "write after call has returned must not be flagged"
         );
     }
@@ -1362,7 +1445,7 @@ mod tests {
             make_event(3, DynamicTraceEventKind::StorageWrite, 0),
         ];
         assert!(
-            analyze_reentrancy_dynamic(&trace).is_empty(),
+            analyze_reentrancy_pattern_dynamic(&trace).is_empty(),
             "write at depth 0 after explicit return must not be flagged"
         );
     }
@@ -1375,7 +1458,7 @@ mod tests {
             make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
             make_event(1, DynamicTraceEventKind::StorageWrite, 0),
         ];
-        let findings = analyze_reentrancy_dynamic(&trace);
+        let findings = analyze_reentrancy_pattern_dynamic(&trace);
         assert_eq!(
             findings.len(),
             1,

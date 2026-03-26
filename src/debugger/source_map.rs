@@ -720,8 +720,8 @@ mod tests {
     #[test]
     fn load_with_different_bytes_re_parses() {
         let bytes_a = tiny_wasm();
-        let mut bytes_b = tiny_wasm();
-        bytes_b.push(0x00); // make content distinct
+        // A valid minimal WASM with no sections (just magic + version) — distinct from tiny_wasm().
+        let bytes_b = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
 
         let mut sm = SourceMap::new();
         sm.load(&bytes_a).unwrap();
@@ -751,7 +751,11 @@ mod tests {
 
         sm.invalidate_cache();
         sm.load(&bytes).unwrap();
-        assert_eq!(sm.parse_count(), 2, "re-parse must occur after explicit invalidation");
+        assert_eq!(
+            sm.parse_count(),
+            2,
+            "re-parse must occur after explicit invalidation"
+        );
     }
 
     #[test]
@@ -785,8 +789,8 @@ mod tests {
     #[test]
     fn cache_miss_clears_stale_mappings() {
         let bytes_a = tiny_wasm();
-        let mut bytes_b = tiny_wasm();
-        bytes_b.push(0x00);
+        // Valid minimal WASM (magic+version only) — distinct from tiny_wasm().
+        let bytes_b = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
 
         let mut sm = SourceMap::new();
         sm.load(&bytes_a).unwrap();

@@ -97,21 +97,15 @@ fn engine_try_load_source_map_reuses_cache() {
     }
     let bytes = std::fs::read(&wasm).unwrap();
 
-    let executor = ContractExecutor::from_bytes(&bytes).expect("executor should load");
+    let executor = ContractExecutor::new(bytes.clone()).expect("executor should load");
     let mut engine = DebuggerEngine::new(executor, vec![]);
 
     engine.try_load_source_map(&bytes);
-    let parse_count_after_first = engine
-        .source_map()
-        .map(|sm| sm.parse_count())
-        .unwrap_or(0);
+    let parse_count_after_first = engine.source_map().map(|sm| sm.parse_count()).unwrap_or(0);
 
     // Second call with same bytes — must be a cache hit.
     engine.try_load_source_map(&bytes);
-    let parse_count_after_second = engine
-        .source_map()
-        .map(|sm| sm.parse_count())
-        .unwrap_or(0);
+    let parse_count_after_second = engine.source_map().map(|sm| sm.parse_count()).unwrap_or(0);
 
     assert_eq!(
         parse_count_after_first, parse_count_after_second,
