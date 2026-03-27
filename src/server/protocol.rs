@@ -98,7 +98,7 @@ pub struct DynamicTraceEvent {
     pub message: String,
     pub caller: Option<String>,
     pub function: Option<String>,
-    pub call_depth: u64,
+    pub call_depth: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +158,9 @@ pub enum DebugRequest {
         function: String,
         args: Option<String>,
     },
+
+    /// Get server capabilities
+    GetCapabilities,
 
     /// Step execution (instruction-level)
     Step,
@@ -499,11 +502,6 @@ mod tests {
         let err = DebugMessage::parse(json).unwrap_err();
         assert!(
             err.contains("client_version"),
-            "Error should mention missing field: {}",
-            err
-        );
-        assert!(err.contains("client_version"), "Error should mention missing field: {}", err);
-            err.contains("request.client_version"),
             "Error should mention missing field: {}",
             err
         );

@@ -1,11 +1,15 @@
+#[path = "fixtures/mod.rs"]
+mod fixtures;
+
 #[test]
 fn test_debugger_engine_current_source_location() {
     use soroban_debugger::debugger::engine::DebuggerEngine;
     use soroban_debugger::runtime::executor::ContractExecutor;
     use soroban_debugger::debugger::source_map::SourceLocation;
 
-    // Minimal WASM with no debug info, so no source location
-    let wasm_bytes = create_test_wasm();
+    // Use a real fixture WASM instead of create_test_wasm to satisfy host requirements (metadata section)
+    let wasm_path = fixtures::get_fixture_path("counter");
+    let wasm_bytes = std::fs::read(&wasm_path).unwrap();
     let executor = ContractExecutor::new(wasm_bytes.clone()).unwrap();
     let mut engine = DebuggerEngine::new(executor, vec![]);
     // Enable instruction debug (loads source map)
@@ -16,7 +20,7 @@ fn test_debugger_engine_current_source_location() {
     // If you want to test with debug info, you would need a WASM with DWARF sections.
     // For now, this checks the method does not panic and returns None gracefully.
 }
-//! Tests for instruction-level stepping functionality
+// Tests for instruction-level stepping functionality
 
 use soroban_debugger::runtime::{Instruction, InstructionParser};
 

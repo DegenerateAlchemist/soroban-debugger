@@ -179,8 +179,8 @@ impl DebugServer {
                 Err(e) => {
                     warn!("Failed to parse request: {}", e);
                     let response = DebugMessage::response(
-                        0, // ID might be unknown if parse failed, but often it's available. 
-                           // For now use 0 or try to extract it if possible.
+                        0, // ID might be unknown if parse failed, but often it's available.
+                        // For now use 0 or try to extract it if possible.
                         DebugResponse::Error {
                             message: format!("Malformed request: {}", e),
                         },
@@ -986,26 +986,34 @@ async fn setup_signal_handlers(shutdown: Arc<Notify>) {
     let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
 
     #[cfg(unix)]
-    let mut sigterm = {
+    {
         use tokio::signal::unix::{signal, SignalKind};
-        Box::pin(signal(SignalKind::terminate()).expect("Failed to setup SIGTERM handler"))
-    };
+        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to setup SIGTERM handler");
 
-    loop {
-        tokio::select! {
-            _ = &mut ctrl_c => {
-                info!("Received SIGINT, initiating shutdown");
-                shutdown.notify_one();
-                break;
-            }
-            #[cfg(unix)]
-            _ = sigterm.recv() => {
-                info!("Received SIGTERM, initiating shutdown");
-                shutdown.notify_one();
-                break;
+        loop {
+            tokio::select! {
+                _ = &mut ctrl_c => {
+                    info!("Received SIGINT, initiating shutdown");
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM, initiating shutdown");
+                    break;
+                }
             }
         }
     }
+
+    #[cfg(not(not(unix)))]
+    {} // This was part of a logic experiment, ignoring
+
+    #[cfg(not(unix))]
+    {
+        let _ = ctrl_c.await;
+        info!("Received SIGINT, initiating shutdown");
+    }
+
+    shutdown.notify_one();
 }
 
 #[cfg(test)]
@@ -1036,20 +1044,24 @@ mod tests {
         let server = DebugServer::new(None, None, None).expect("Failed to create server");
         let shutdown = server.shutdown.clone();
 
-        let server_task = tokio::spawn(async move {
-            let _ = server.run(0);
-        });
+        let local = tokio::task::LocalSet::new();
+        local.run_until(async move {
+            let server_task = tokio::task::spawn_local(async move {
+                let _ = server.run(0).await;
+            });
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        shutdown.notify_one();
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            shutdown.notify_one();
 
-        tokio::time::timeout(
-            tokio::time::Duration::from_secs(5),
-            server_task,
-        )
-        .await
-        .expect("Server shutdown timed out")
-        .expect("Server task panicked");
+            tokio::time::timeout(
+                tokio::time::Duration::from_secs(5),
+                server_task,
+            )
+            .await
+            .expect("Server shutdown timed out")
+            .expect("Server task panicked");
+        })
+        .await;
     }
 
     #[test]

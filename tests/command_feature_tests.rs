@@ -77,6 +77,8 @@ fn symbolic_cli_honors_caps_and_reports_truncation() {
             "4",
             "--path-cap",
             "2",
+            "--max-breadth",
+            "10",
             "--timeout",
             "30",
         ])

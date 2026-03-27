@@ -28,9 +28,10 @@ fn main() {
                     println!("  Severity: {:?}", finding.severity);
                     println!("  Description: {}", finding.description);
 
-                    if let Some(confidence) = &finding.confidence {
-                        println!("  Confidence: {:.0}%", confidence);
+                    if let Some(confidence) = finding.confidence {
+                        println!("  Confidence: {:.0}%", confidence * 100.0);
                     }
+
                     if let Some(rationale) = &finding.rationale {
                         println!("  Rationale: {}", rationale);
                     }

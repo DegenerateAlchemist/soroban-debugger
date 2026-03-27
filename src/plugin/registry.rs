@@ -444,6 +444,13 @@ struct PluginHealth {
     last_error: Option<String>,
 }
 
+struct InvocationMetadata<'a> {
+    name: &'a str,
+    kind: PluginInvocationKind,
+    timeout: Duration,
+    elapsed: Duration,
+}
+
 impl PluginRegistry {
     /// Create a new plugin registry with the default plugin directory
     pub fn new() -> PluginResult<Self> {
@@ -892,9 +899,13 @@ impl PluginRegistry {
         self.record_outcome(
             health,
             Some(context),
-            name,
-            PluginInvocationKind::Hook,
-            start.elapsed(),
+            InvocationMetadata {
+                name,
+                kind: PluginInvocationKind::Hook,
+                timeout: self.policy.hook_timeout,
+                elapsed: start.elapsed(),
+            },
+
             result.map_err(|_| {
                 PluginError::ExecutionFailed("Plugin panicked during hook execution".to_string())
             }),
@@ -928,9 +939,13 @@ impl PluginRegistry {
         self.record_outcome(
             health,
             None,
-            name,
-            PluginInvocationKind::Command,
-            start.elapsed(),
+            InvocationMetadata {
+                name,
+                kind: PluginInvocationKind::Command,
+                timeout: self.policy.command_timeout,
+                elapsed: start.elapsed(),
+            },
+
             result.map_err(|_| {
                 PluginError::ExecutionFailed("Plugin panicked during command execution".to_string())
             }),
@@ -964,9 +979,13 @@ impl PluginRegistry {
         self.record_outcome(
             health,
             None,
-            name,
-            PluginInvocationKind::Formatter,
-            start.elapsed(),
+            InvocationMetadata {
+                name,
+                kind: PluginInvocationKind::Formatter,
+                timeout: self.policy.formatter_timeout,
+                elapsed: start.elapsed(),
+            },
+
             result.map_err(|_| {
                 PluginError::ExecutionFailed(
                     "Plugin panicked during formatter execution".to_string(),
@@ -978,18 +997,12 @@ impl PluginRegistry {
     fn record_outcome<T>(
         &self,
         health: &mut HashMap<String, PluginHealth>,
-        mut context: Option<&mut EventContext>,
-        name: &str,
-        kind: PluginInvocationKind,
-        elapsed: Duration,
+        context: Option<&mut EventContext>,
+        meta: InvocationMetadata,
         result: Result<PluginResult<T>, PluginError>,
     ) -> PluginResult<T> {
-        let timeout = match kind {
-            PluginInvocationKind::Hook => self.policy.hook_timeout,
-            PluginInvocationKind::Command => self.policy.command_timeout,
-            PluginInvocationKind::Formatter => self.policy.formatter_timeout,
-        };
-        let state = health.entry(name.to_string()).or_default();
+        let state = health.entry(meta.name.to_string()).or_default();
+
 
         match result {
             Err(err) => {
@@ -1000,13 +1013,14 @@ impl PluginRegistry {
                 if state.consecutive_failures >= self.policy.max_consecutive_failures {
                     state.circuit_open = true;
                 }
-                if let Some(ctx) = context.as_mut() {
+                if let Some(ctx) = context {
+
                     Self::push_telemetry(
                         ctx,
-                        name,
-                        kind,
+                        meta.name,
+                        meta.kind,
                         PluginInvocationOutcome::Panic,
-                        elapsed.as_millis(),
+                        meta.elapsed.as_millis(),
                         err.to_string(),
                     );
                 }
@@ -1019,26 +1033,28 @@ impl PluginRegistry {
                 if state.consecutive_failures >= self.policy.max_consecutive_failures {
                     state.circuit_open = true;
                 }
-                if let Some(ctx) = context.as_mut() {
+                if let Some(ctx) = context {
+
                     Self::push_telemetry(
                         ctx,
-                        name,
-                        kind,
+                        meta.name,
+                        meta.kind,
                         PluginInvocationOutcome::Failure,
-                        elapsed.as_millis(),
+                        meta.elapsed.as_millis(),
                         err.to_string(),
                     );
                 }
                 Err(err)
             }
-            Ok(Ok(_value)) if elapsed > timeout => {
+            Ok(Ok(value)) if meta.elapsed > meta.timeout => {
+
                 state.total_timeouts += 1;
                 state.total_failures += 1;
                 state.timeout_count += 1;
                 state.consecutive_failures += 1;
                 let message = format!(
                     "Plugin '{}' exceeded the {:?} {:?} budget ({:?})",
-                    name, kind, timeout, elapsed
+                    meta.name, meta.kind, meta.timeout, meta.elapsed
                 );
                 state.last_error = Some(message.clone());
                 if state.timeout_count >= self.policy.max_timeouts
@@ -1046,13 +1062,14 @@ impl PluginRegistry {
                 {
                     state.circuit_open = true;
                 }
-                if let Some(ctx) = context.as_mut() {
+                if let Some(ctx) = context {
+
                     Self::push_telemetry(
                         ctx,
-                        name,
-                        kind,
+                        meta.name,
+                        meta.kind,
                         PluginInvocationOutcome::Timeout,
-                        elapsed.as_millis(),
+                        meta.elapsed.as_millis(),
                         message.clone(),
                     );
                 }
@@ -1063,13 +1080,14 @@ impl PluginRegistry {
                 state.timeout_count = 0;
                 state.circuit_open = false;
                 state.last_error = None;
-                if let Some(ctx) = context.as_mut() {
+                if let Some(ctx) = context {
+
                     Self::push_telemetry(
                         ctx,
-                        name,
-                        kind,
+                        meta.name,
+                        meta.kind,
                         PluginInvocationOutcome::Success,
-                        elapsed.as_millis(),
+                        meta.elapsed.as_millis(),
                         "Plugin invocation completed successfully.".to_string(),
                     );
                 }
@@ -1153,6 +1171,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread;
 
+    #[allow(dead_code)]
     #[derive(Clone)]
     enum Behavior {
         Success,
@@ -1736,6 +1755,7 @@ mod tests {
             dependencies: vec![],
         };
         let new = PluginSnapshot {
+            name: "example-plugin".to_string(),
             version: "2.0.0".to_string(),
             capabilities: PluginCapabilities {
                 hooks_execution: true,

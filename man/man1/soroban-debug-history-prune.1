@@ -9,18 +9,14 @@ history\-prune \- Prune or compact run history according to a retention policy
 Prune or compact run history according to a retention policy
 .SH OPTIONS
 .TP
-\fB\-\-max\-records\fR \fI<N>\fR
-Keep only the N most\-recent history records; oldest are removed first.
-
-Takes precedence over `\-\-history\-max\-records` (the global flag) when both are supplied, so you can override the default policy for a single explicit prune operation.
+\fB\-\-max\-records\fR \fI<COUNT>\fR
+Keep only the N most\-recent records
 .TP
 \fB\-\-max\-age\-days\fR \fI<DAYS>\fR
-Remove records older than N days.
-
-Takes precedence over `\-\-history\-max\-age\-days` (the global flag).
+Drop records older than N days
 .TP
 \fB\-\-dry\-run\fR
-Show what would be removed without writing any changes to disk
+Print what would be removed without actually deleting anything
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
+Print help

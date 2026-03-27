@@ -33,6 +33,8 @@ fn symbolic_execution_with_storage_seed() {
         max_paths: 10,
         max_input_combinations: 36,
         timeout_secs: 30,
+        max_breadth: 10,
+        max_depth: 3,
         seed: None,
         storage_seed: Some(fs::read_to_string(&storage_path).unwrap()),
     };
@@ -64,6 +66,8 @@ fn symbolic_execution_without_storage_seed() {
         max_paths: 5,
         max_input_combinations: 10,
         timeout_secs: 30,
+        max_breadth: 5,
+        max_depth: 2,
         seed: None,
         storage_seed: None,
     };

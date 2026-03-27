@@ -4,7 +4,15 @@ use soroban_debugger::runtime::executor::ContractExecutor;
 #[path = "fixtures/mod.rs"]
 mod fixtures;
 
-use soroban_debugger::debugger::source_map::SourceMap;
+use std::path::PathBuf;
+
+fn fixture_wasm(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("wasm")
+        .join(format!("{name}.wasm"))
+}
 
 #[test]
 fn source_map_missing_debug_info_is_graceful() {

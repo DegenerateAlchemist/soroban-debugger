@@ -42,7 +42,7 @@ impl ReplExecutor {
                     miette::miette!("Failed to load network snapshot {:?}: {}", snapshot_path, e)
                 })?;
             let loaded = loader.apply_to_environment()?;
-            executor.apply_snapshot_ledger(&loaded)?;
+            engine.executor_mut().apply_snapshot_ledger(&loaded)?;
             crate::logging::log_display(loaded.format_summary(), crate::logging::LogLevel::Info);
         }
 

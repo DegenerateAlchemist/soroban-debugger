@@ -3,7 +3,7 @@
   "fixtures": [
     {
       "name": "always_panic",
-      "exports": ["panic"],
+      "exports": ["_", "panic"],
       "source": {
         "contract_dir": "tests/fixtures/contracts/always_panic",
         "lib_rs": "tests/fixtures/contracts/always_panic/src/lib.rs"
@@ -17,7 +17,7 @@
     },
     {
       "name": "budget_heavy",
-      "exports": ["heavy"],
+      "exports": ["_", "heavy"],
       "source": {
         "contract_dir": "tests/fixtures/contracts/budget_heavy",
         "lib_rs": "tests/fixtures/contracts/budget_heavy/src/lib.rs"
@@ -31,7 +31,7 @@
     },
     {
       "name": "counter",
-      "exports": ["get", "increment"],
+      "exports": ["_", "get", "increment"],
       "source": {
         "contract_dir": "tests/fixtures/contracts/counter",
         "lib_rs": "tests/fixtures/contracts/counter/src/lib.rs"
@@ -45,7 +45,7 @@
     },
     {
       "name": "cross_contract",
-      "exports": ["call"],
+      "exports": ["_", "call"],
       "source": {
         "contract_dir": "tests/fixtures/contracts/cross_contract",
         "lib_rs": "tests/fixtures/contracts/cross_contract/src/lib.rs"
@@ -59,7 +59,7 @@
     },
     {
       "name": "echo",
-      "exports": ["echo"],
+      "exports": ["_", "echo"],
       "source": {
         "contract_dir": "tests/fixtures/contracts/echo",
         "lib_rs": "tests/fixtures/contracts/echo/src/lib.rs"
