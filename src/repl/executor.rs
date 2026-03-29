@@ -144,7 +144,22 @@ impl ReplExecutor {
             return Ok(v);
         }
 
-        let address = if looks_like_strkey_address(raw) {
+        // If the string looks like it was meant to be a strkey (G/C prefix,
+        // 56 chars) but fails full validation, surface a clear error now
+        // rather than letting the host emit a confusing internal error.
+        if (raw.starts_with('G') || raw.starts_with('C'))
+            && raw.len() == 56
+            && !crate::analyzer::security::is_valid_strkey(raw)
+        {
+            return Err(miette::miette!(
+                "'{}' has the right length for a Stellar StrKey address but \
+                 is not valid (bad base32 characters or checksum). \
+                 Check for typos, or use an alias instead.",
+                raw
+            ));
+        }
+
+        let address = if crate::analyzer::security::is_valid_strkey(raw) {
             raw.to_string()
         } else {
             if !self.address_aliases.contains_key(raw) {
@@ -253,11 +268,6 @@ fn parse_repl_arg(arg: &str) -> Result<Value> {
         Ok(value) => Ok(value),
         Err(_) => Ok(Value::String(arg.to_string())),
     }
-}
-
-fn looks_like_strkey_address(s: &str) -> bool {
-    let first = s.as_bytes().first().copied();
-    matches!(first, Some(b'G') | Some(b'C')) && s.len() >= 10
 }
 
 fn parse_typed_string_arg(raw: &str) -> Value {

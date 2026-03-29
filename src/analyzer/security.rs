@@ -215,7 +215,7 @@ impl Default for SecurityAnalyzer {
 
 /// CRC-16/XModem (poly = 0x1021, init = 0x0000, no reflection).
 /// Used by Stellar StrKey to protect against transcription errors.
-fn strkey_crc16(data: &[u8]) -> u16 {
+pub(crate) fn strkey_crc16(data: &[u8]) -> u16 {
     let mut crc: u16 = 0x0000;
     for &byte in data {
         crc ^= (byte as u16) << 8;
@@ -244,7 +244,7 @@ fn strkey_crc16(data: &[u8]) -> u16 {
 /// Any 56-char string that fails even one of these steps is **not** a valid
 /// address — it is, for example, an error-message fragment, a base64 blob, or
 /// a random identifier that merely happens to start with 'G' or 'C'.
-fn is_valid_strkey(s: &str) -> bool {
+pub(crate) fn is_valid_strkey(s: &str) -> bool {
     if s.len() != 56 {
         return false;
     }
